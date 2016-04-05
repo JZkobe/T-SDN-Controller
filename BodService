@@ -1,0 +1,1655 @@
+package org.opendaylight.controller.sdon.cvniBod.bod;
+
+import java.io.InterruptedIOException;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import java.util.concurrent.*;
+
+
+import org.jgrapht.UndirectedGraph;
+import org.jgrapht.graph.DefaultEdge;
+import org.opendaylight.controller.sdon.cvniBod.*;
+import org.opendaylight.controller.sdon.cvniBod.account.*;
+import org.opendaylight.controller.sdon.cvniBod.bundleCommunicate.BundleCommnunication;
+import org.opendaylight.controller.sdon.cvniBod.calPath.GraphManager;
+import org.opendaylight.controller.sdon.cvniBod.calPath.StrategyContext;
+import org.opendaylight.controller.sdon.cvniBod.helperFunc.EasyFunction;
+import org.opendaylight.controller.sdon.cvniBod.returnInfo.*;
+import org.opendaylight.controller.sdon.cvniBod.returnInfo.ietf.IetfAddress;
+import org.opendaylight.controller.sdon.cvniBod.returnInfo.ietf.IetfNodeId;
+import org.opendaylight.controller.sdon.cvniBod.returnInfo.ietf.SwitchCapability;
+import org.opendaylight.controller.sdon.cvniBod.returnInfo.linkInfo.AddLinkResult;
+import org.opendaylight.controller.sdon.cvniBod.returnInfo.nodeInfo.NodeInfo;
+import org.opendaylight.controller.sdon.cvniBod.returnInfo.nodeInfo.NodeProperty;
+import org.opendaylight.controller.sdon.cvniBod.websockets.*;
+import org.opendaylight.controller.sdon.cvniBod.returnInfo.nodeInfo.UpdateNodeInfo;
+import org.opendaylight.controller.sdon.cvniBod.returnInfo.nodeInfo.VtsNodeProperty;
+import org.opendaylight.controller.sdon.cvniBod.returnInfo.portInfo.ChoosePortResult;
+import org.opendaylight.controller.sdon.cvniBod.returnInfo.portInfo.PortProperty;
+import org.opendaylight.controller.sdon.cvniBod.returnInfo.portInfo.PortResource;
+import org.opendaylight.controller.sdon.cvniBod.returnInfo.portInfo.UpdateUserPortInfo;
+import org.opendaylight.controller.sdon.cvniBod.returnInfo.portInfo.UserEndOper;
+import org.opendaylight.controller.sdon.cvniBod.returnInfo.portInfo.VtsPortInfo;
+import org.opendaylight.controller.sdon.cvniBod.sendPacket.SendPacketProxy;
+import org.opendaylight.controller.sdon.cvniBod.timeStrategy.TimeUtils;
+import org.opendaylight.controller.sdon.cvniTed.LinkPortPropertyInventory;
+import org.opendaylight.controller.sdon.cvniTed.NetPortPropertyFactory;
+import org.opendaylight.controller.sdon.cvniTed.NodeTed;
+import org.opendaylight.controller.sdon.cvniTed.UserPortPropertyFactory;
+import org.opendaylight.yang.gen.v1.urn.opendaylight.openflow.common.types.rev130731.MeterModCommand;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class BodServiceImpl implements IBodService {
+	private static final Logger LOG = LoggerFactory.getLogger(BodServiceImpl.class);
+
+//	public static BodServiceImpl lockedImpl;
+
+
+	private LinkPortPropertyInventory iTest = BundleCommnunication.getLinkBundleInfo(AccountServiceImpl.class);
+
+
+	//	public Object lock = new Object();
+	//--------------------------------拓扑API-----------------------------------
+	@Override
+	public QueryCustomerInfoResult queryCustomerInfo(String customerName) {
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		Customer customer = Customer.customerInfoMap.get(customerName);
+		QueryCustomerInfoResult rst = customer.qcInfoResult;
+		return rst;
+	}
+
+	@Override
+	public List<String> checkUserAuthority(String customerName, String userName) {
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		Customer customer = Customer.customerInfoMap.get(customerName);
+		if (!customer.userInfoMap.containsKey(userName)) {
+			LOG.error("这个user不存在");
+			return null;
+		}
+		User user = customer.userInfoMap.get(userName);
+		String topologyStatus = null;
+		String userAuthority = null;
+		if (customer.bodTopo == null || customer.bodTopo.nodes == null ||
+				customer.bodTopo.nodes.isEmpty()) {
+			//没有存储拓扑
+			topologyStatus = "false";//kobe
+		} else {
+			topologyStatus = "true";
+		}
+		//根据文档规范不需要
+//		if(user.getUserType() == 1){
+//			//网络配置用户
+//			userAuthority = "true";
+//		}else if(user.getUserType() == 2){
+//			//网络监视用户
+//			userAuthority = "false";
+//		}else{
+//			LOG.error("没有这个用户类型");
+//			return null;
+//		}
+		List<String> rst = new ArrayList<>();
+		rst.add(topologyStatus);
+		rst.add(userAuthority);
+		LOG.info("rst-{}", rst);
+		return rst;
+	}
+
+	@Override
+	public List<String> listVertex(String customerName, String userName) {
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		Customer customer = Customer.customerInfoMap.get(customerName);
+		BODTopo bodTopo = customer.bodTopo;
+		if (bodTopo == null || bodTopo.nodes == null || bodTopo.nodes.isEmpty()) {
+			LOG.error("没有这个拓扑,或者没有拓扑的节点信息!");
+			return null;
+		}
+		List<String> rst = new ArrayList<>();
+		for (Integer nodeId : bodTopo.nodes) {
+			rst.add(nodeId.toString());
+		}
+		LOG.info("rst-{}", rst);
+		return rst;
+	}
+
+	@Override
+	public List<String> listVertex(String customerName) {
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		Customer customer = Customer.customerInfoMap.get(customerName);
+		BODTopo bodTopo = customer.bodTopo;
+		if (bodTopo == null || bodTopo.nodes == null || bodTopo.nodes.isEmpty()) {
+			LOG.error("没有这个拓扑,或者没有拓扑的节点信息!");
+			return null;
+		}
+		List<String> rst = new ArrayList<>();
+		for (Integer nodeId : bodTopo.nodes) {
+			rst.add(nodeId.toString());
+		}
+		LOG.info("rst-{}", rst);
+		return rst;
+	}
+
+
+	@Override
+	public VtsNodeProperty readVertex(String customerName, int nodeId) {
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		Customer customer = Customer.customerInfoMap.get(customerName);
+		BODTopo bodTopo = customer.bodTopo;
+		if (bodTopo == null || bodTopo.nodes == null || bodTopo.nodes.isEmpty()) {
+			LOG.error("没有这个拓扑,或者没有拓扑的节点信息!");
+			return null;
+		}
+		if (!bodTopo.nodes.contains(nodeId)) {
+			LOG.error("该用户没有这个节点ID");
+			return null;
+		}
+		NodeTed nodeTed = bodTopo.nodeStoreInTed.get(nodeId);
+		VtsNodeProperty rst = new VtsNodeProperty();
+		rst.setId(nodeTed.nodeId.toString());
+		//kobe 7.14 start
+		if (bodTopo.virtualNameMap.get(nodeId) == null) {
+			rst.setName(nodeTed.o_name);
+		} else {
+			rst.setName(bodTopo.virtualNameMap.get(nodeId));
+
+		}
+		rst.setLatitude(Integer.toString(nodeTed.latitude));
+		rst.setLongitude(Integer.toString(nodeTed.longitude));
+		IetfNodeId rstIetfNode = new IetfNodeId();
+		rstIetfNode.setIetfaddressFamily(nodeTed.addressFamily);
+		rstIetfNode.setIetfaddress(nodeTed.address);
+		rst.setIetfNodeId(rstIetfNode);
+		LOG.info("rst-{}", rst);
+		return rst;
+	}
+
+	@Override
+	public boolean adjustNodeName(String customerName, int nodeId, String name) {
+		LOG.info("-----------entering adjustNodeName() in BodServiceImpl, customerName is {}, " +
+				"nodeId is {}, new name is {}", customerName, nodeId, name);
+		LOG.info("-------------trying to get customer info from customerInfoMap");
+		Customer customer = Customer.customerInfoMap.get(customerName);
+		BODTopo bodTopo = customer.bodTopo;
+		if (!bodTopo.nodes.contains(nodeId)) {
+			LOG.error("bod没有这个节点");
+			return false;
+		}
+		if (!bodTopo.nodeStoreInTed.containsKey(nodeId)) {
+			LOG.error("bod节点信息不统一");
+			return false;
+		}
+		bodTopo.virtualNameMap.put(nodeId, name);
+		return true;
+	}
+
+	@Override
+	public List<String> listPort(String customerName, int nodeId) {
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		Customer customer = Customer.customerInfoMap.get(customerName);
+		BODTopo bodTopo = customer.bodTopo;
+		if (bodTopo == null || bodTopo.nodes == null || bodTopo.nodes.isEmpty()) {
+			LOG.error("没有这个拓扑,或者没有拓扑的节点信息!");
+			return null;
+		}
+		if (!bodTopo.nodes.contains(nodeId)) {
+			LOG.error("该用户没有这个节点ID");
+			return null;
+		}
+		List<String> rst = new ArrayList<>();
+		//添加客户侧端口
+		if (!bodTopo.nodePortMap.isEmpty() && bodTopo.nodePortMap.containsKey(nodeId)) {
+			ChoosePortResult chooseUserPortList = bodTopo.nodePortMap.get(nodeId);
+			for (PortProperty userPort : chooseUserPortList.getEnds()) {
+				rst.add("http://<IP>:<PORT>/rest/json/TOPOLOGY_API/vertex/" + IpUtil.int2Ip(nodeId) +
+						"/end/" + userPort.getId());
+				String Id = userPort.getId();
+				LOG.info("   Id :{} type is userport", Id);
+			}
+		}
+		//添加线路侧端口
+		Set<NetPortPropertyFactory> netPorSet = iTest.getAllNetPort((long) nodeId);
+		for (NetPortPropertyFactory netPort : netPorSet) {
+			rst.add("http://<IP>:<PORT>/rest/json/TOPOLOGY_API/vertex/" + IpUtil.int2Ip(nodeId) +
+					"/end/" + netPort._portNo.toString());
+			String Id = netPort._portNo.toString();
+			LOG.info("   Id :{} type is netport", Id);
+		}
+
+		LOG.info("rst-{}", rst);
+		return rst;
+	}
+
+	public VtsPortInfo readPort(String customerName, int nodeId, int portId) {
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		Customer customer = Customer.customerInfoMap.get(customerName);
+		BODTopo bodTopo = customer.bodTopo;
+		if (bodTopo == null || bodTopo.nodes == null || bodTopo.nodes.isEmpty()) {
+			LOG.error("没有这个拓扑,或者没有拓扑的节点信息!");
+			return null;
+		}
+		if (!bodTopo.nodes.contains(nodeId)) {
+			LOG.error("该用户没有这个节点ID");
+			return null;
+		}
+		VtsPortInfo rst = new VtsPortInfo();
+		if (iTest.isNetPort((long) nodeId, (long) portId)) {
+			LOG.info("线路侧端口");
+			//是线路侧端口
+			NetPortPropertyFactory netPort = iTest.getNetPortInfo((long) nodeId, (long) portId);
+			LOG.info("    curry   special port");
+			if ((portId == 11668225l && nodeId == 176300801) || (portId == 17694723l && nodeId == 176300291)) {
+				UserPortPropertyFactory userPort = iTest.getUserPortInfo((long) nodeId, (long) portId);
+				if (bodTopo.nodePortMap.get(nodeId) == null) {
+					rst.setName(userPort._name);
+					LOG.info(" the  name 1 is {}", userPort._name);
+				} else {
+					rst.setName(bodTopo.nodePortMap.get(nodeId).getThisPort(portId).getName());
+					LOG.info(" the name 2 is {}", rst.getName());
+				}
+				LOG.info(" the port's name is {}", rst.getName());
+				rst.setVertex(Integer.toString(nodeId));
+				rst.setEdgeEndType(2);
+				rst.setClientEndType(0);
+				//kobe modify 7-5
+				LOG.info(" ******************curry**************special port");
+				if (bodTopo.nodePortMap.get(nodeId).getThisPort(portId).usedType == 1) {
+					String resc = "http://<IP>:<PORT>/rest/jOFP_MATCH_PADDINGson/TOPOLOGY_API/vertex/" + nodeId + "/end/" + portId + "/edgeEndRsrc/001";
+					rst.setEdgeEndResources(resc);//资源空闲
+				} else {
+					String resc = "http://<IP>:<PORT>/rest/json/TOPOLOGY_API/vertex/" + nodeId + "/end/" + portId + "/edgeEndRsrc/003";
+					rst.setEdgeEndResources(resc);//资源被占用
+				}
+				IetfAddress ietf = new IetfAddress();
+				ietf.setAddressFamily(userPort.addressFamily);
+				ietf.setIfIndex(userPort.ifIndex);
+				rst.setIetfAddress(ietf);
+				LOG.info("rst-{}", rst);
+				return rst;
+			} else {
+				LOG.info("  curry  bod   readport");
+				rst.setName("-");
+				rst.setId(netPort._portNo.toString());
+				rst.setVertex(Integer.toString(nodeId));
+				rst.setEdgeEndType(2);
+				//判断资源是否空闲
+				int remoteNode = iTest.getRemoteNode((long) nodeId, (long) portId).intValue();
+				List<String> sigTypeList = bodTopo.getAllSigType(nodeId, remoteNode);
+				//kobe modify 7-5
+				if (sigTypeList.size() == 1 && sigTypeList.contains("1")) {//如果sigType全为1,表明资源没有被占用
+					String resc = "http://<IP>:<PORT>/rest/json/TOPOLOGY_API/vertex/" + nodeId + "/end/" + portId + "/edgeEndRsrc/010";
+					rst.setEdgeEndResources(resc);//资源空闲
+				} else {
+					String resc = "http://<IP>:<PORT>/rest/json/TOPOLOGY_API/vertex/" + nodeId + "/end/" + portId + "/edgeEndRsrc/001";
+					rst.setEdgeEndResources(resc);//资源被占用
+				}
+				IetfAddress ietf = new IetfAddress();
+				ietf.setAddressFamily(netPort.addressFamily);
+				ietf.setIfIndex(netPort.ifIndex);
+				rst.setIetfAddress(ietf);
+				LOG.info("rst-{}", rst);
+				return rst;
+			}
+		} else if (iTest.isUserPort((long) nodeId, (long) portId)) {
+
+			//9.18 todo
+			LOG.info("客户侧端口");
+			//是客户侧端口
+			UserPortPropertyFactory userPort = iTest.getUserPortInfo((long) nodeId, (long) portId);
+			rst.setId(userPort.userPortId.toString());
+			//kobe 7.14 start
+			//9.17  BOD和VTS要求端口名称应该为 子架 @ ～～～
+			if (bodTopo.nodePortMap.get(nodeId).getThisPort(portId).getName().equals("-")) {
+				rst.setName(userPort._name);
+				LOG.info(" the  name 1 is {}", userPort._name);
+			} else {
+				rst.setName(bodTopo.nodePortMap.get(nodeId).getThisPort(portId).getName());
+				LOG.info(" the name 2 is {}", rst.getName());
+			}
+
+			rst.setVertex(Integer.toString(nodeId));
+			rst.setEdgeEndType(1);
+			rst.setClientEndType(userPort.clientEdgeEndType);
+			//kobe modify 7-5
+			LOG.info(" ******************curry**************8");
+			if (bodTopo.nodePortMap.get(nodeId).getThisPort(portId).usedType == 1) {
+				String resc = "http://<IP>:<PORT>/rest/jOFP_MATCH_PADDINGson/TOPOLOGY_API/vertex/" + nodeId + "/end/" + portId + "/edgeEndRsrc/001";
+				rst.setEdgeEndResources(resc);//资源空闲
+			} else {
+				String resc = "http://<IP>:<PORT>/rest/json/TOPOLOGY_API/vertex/" + nodeId + "/end/" + portId + "/edgeEndRsrc/003";
+				rst.setEdgeEndResources(resc);//资源被占用
+			}
+			IetfAddress ietf = new IetfAddress();
+			ietf.setAddressFamily(userPort.addressFamily);
+			ietf.setIfIndex(userPort.ifIndex);
+			rst.setIetfAddress(ietf);
+			LOG.info("rst-{}", rst);
+			return rst;
+
+		} else {
+			LOG.error("判断失误,不知道是用户侧端口还是线路侧端口");
+			return null;
+		}
+
+	}
+
+	@Override
+	public List<String> listPortResource(String customerName, int nodeId, int portId) {
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		Customer customer = Customer.customerInfoMap.get(customerName);
+		BODTopo bodTopo = customer.bodTopo;
+		if (bodTopo == null || bodTopo.nodes == null || bodTopo.nodes.isEmpty()) {
+			LOG.error("没有这个拓扑,或者没有拓扑的节点信息!");
+			return null;
+		}
+		if (!bodTopo.nodes.contains(nodeId)) {
+			LOG.error("该用户没有这个节点ID");
+			return null;
+		}
+		List<String> rst = new ArrayList<>();
+		if (iTest.isUserPort((long) nodeId, (long) portId)) {
+			//是客户侧端口
+
+			if (bodTopo.nodePortMap.get(nodeId).getThisPort(portId).usedType == 1) {
+				rst.add("01");//资源空闲
+			} else {
+				rst.add("03");//资源被占用
+			}
+
+
+		} else if (iTest.isNetPort((long) nodeId, (long) portId)) {
+			int remoteNode = iTest.getRemoteNode((long) nodeId, (long) portId).intValue();
+			List<String> sigTypeList = bodTopo.getAllSigType(nodeId, remoteNode);
+			if ((sigTypeList.size() == 1 && sigTypeList.contains("1")) ||
+					!bodTopo.isEdgeFull(nodeId, remoteNode)) {
+				rst.add("01");//资源空闲||有空闲资源,也有被占用资源
+			}
+			rst.addAll(sigTypeList);
+		} else {
+			LOG.error("判断失误,不知道是用户侧端口还是线路侧端口");
+			return null;
+		}
+		LOG.info("rst-{}", rst);
+		return rst;
+	}
+
+	@Override
+	public PortResource readPortResource(String customerName, int nodeId, int portId, int signalType) {
+
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		Customer customer = Customer.customerInfoMap.get(customerName);
+		BODTopo bodTopo = customer.bodTopo;
+		if (bodTopo == null || bodTopo.nodes == null || bodTopo.nodes.isEmpty()) {
+			LOG.error("没有这个拓扑,或者没有拓扑的节点信息!");
+			return null;
+		}
+		if (!bodTopo.nodes.contains(nodeId)) {
+			LOG.error("该用户没有这个节点ID");
+			return null;
+		}
+		PortResource rst = new PortResource();
+		rst.setId(Integer.toString(nodeId));
+		rst.setEnd(Integer.toString(portId));
+		if (iTest.isUserPort((long) nodeId, (long) portId)) {
+			//是客户侧端口
+			List<String> rscLayer = new ArrayList<>();
+			// cuirui 7.10  start
+			UserPortPropertyFactory userPort = iTest.getUserPortInfo((long) nodeId, (long) portId);
+
+			if (userPort._state.isEthernet()) {
+				rscLayer.add("ethernet");
+
+			} else if (userPort._state.isOdu()) {
+				if (userPort.clientEdgeEndType == 1) {
+					rscLayer.add("odu0");
+				} else if (userPort.clientEdgeEndType == 2) {
+					rscLayer.add("odu2");
+				}
+			}
+			// cuirui 7.10 end
+			rst.setRsrcLayer(rscLayer);
+			if (signalType == 1) {
+				rst.setRsrcCondition("avail");
+			} else {
+				rst.setRsrcCondition("busy");
+			}
+
+			rst.setRsrcState("actual");
+			rst.setRsrcDetail(iTest.getUserPortSpeed((long) nodeId, (long) portId).toString());
+
+		} else if (iTest.isNetPort((long) nodeId, (long) portId)) {
+			//线路侧端口
+
+			//写入rscLayer
+			List<String> rscLayer = new ArrayList<>();
+			String nodeString = Integer.toString(nodeId);
+			String portString = Integer.toString(portId);
+
+			rscLayer.add("odu0");
+			rscLayer.add("odu1");
+			rscLayer.add("odu2");
+			rscLayer.add("oduFlex");
+			rst.setRsrcLayer(rscLayer);
+
+			//写入其他
+			rst.setRsrcState("potential");
+			if (signalType == 1) {
+				rst.setRsrcCondition("avail");
+			} else {
+				rst.setRsrcCondition("busy");
+			}
+			String remoteNodeString = iTest.getRemoteNode((long) nodeId, (long) portId).toString();
+			rst.setRsrcDetail(bodTopo.getResourceInfo(signalType, nodeString, remoteNodeString));
+		} else {
+			LOG.error("判断失误,不知道是用户侧端口还是线路侧端口");
+			return null;
+		}
+		LOG.info("rst-{}", rst);
+		return rst;
+	}
+
+	@Override
+	public UpdateNodeInfo updateVertex(String customerName) {
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		Customer customer = Customer.customerInfoMap.get(customerName);
+		BODTopo bodTopo = customer.bodTopo;
+		LOG.info("updateNodeInfo-{}", bodTopo.updateNodeInfo);
+		return bodTopo.updateNodeInfo;
+	}
+
+	@Override
+	public UpdateUserPortInfo updateUserPort(String customerName, Integer nodeId) {
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		Customer customer = Customer.customerInfoMap.get(customerName);
+		BODTopo bodTopo = customer.bodTopo;
+		if (bodTopo == null || bodTopo.nodes == null || bodTopo.nodes.isEmpty()) {
+			LOG.error("没有这个拓扑,或者没有拓扑的节点信息!");
+			return null;
+		}
+		if (!bodTopo.nodes.contains(nodeId)) {
+			LOG.error("该用户没有这个节点ID");
+			return null;
+		}
+		UpdateUserPortInfo returnResult = new UpdateUserPortInfo();
+		List<UserEndOper> rst = new ArrayList<>();
+		ChoosePortResult choosePortResult = bodTopo.nodePortMap.get(nodeId);
+		for (PortProperty port : choosePortResult.getEnds()) {
+			UserEndOper rstPort = new UserEndOper();
+			rstPort.setId(port.getId());
+			UserPortPropertyFactory userPortProperty = iTest.getUserPortInfo(nodeId.longValue(), Long.parseLong(port.getId()));
+			rstPort.setOperStatus(userPortProperty.status);
+			rst.add(rstPort);
+		}
+		returnResult.setEndOperList(rst);
+		LOG.info("returnResult-{}", returnResult);
+		return returnResult;
+	}
+
+	@Override
+	public UpdateServiceInfo updateService(String customerName) {
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		Customer customer = Customer.customerInfoMap.get(customerName);
+		BODTopo bodTopo = customer.bodTopo;
+		UpdateServiceInfo returnInfo = new UpdateServiceInfo();
+		List<ServiceOper> rst = new ArrayList<>();
+		for (String serviceId : bodTopo.serviceIdReturnInfo.keySet()) {
+			ReturnPath returnPathInfo = bodTopo.serviceIdReturnInfo.get(serviceId);
+			ServiceOper serviceInfo = new ServiceOper();
+			serviceInfo.setServiceId(serviceId);
+			serviceInfo.setOperStatus(returnPathInfo.getOperStatus());
+			rst.add(serviceInfo);
+		}
+		returnInfo.setServiceList(rst);
+		LOG.info("returnInfo-{}", returnInfo);
+		return returnInfo;
+	}
+
+	//---------------------------业务API--------------------------------------------
+	@Override
+	public ReturnPath setupRealTimePath(String customerName,
+										String serviceName, int serviceType, int[] aEnd, int[] zEnd,
+										String layer, int bandwidth, int protectType, int WTR, boolean isUpdate) {
+		LOG.info("setupRealTimePath(), 测试通过");
+		LOG.info("hry added, customerName-{}, serviceName-{}, serviceType-{},"
+						+ "aEnd-{}, zEnd-{}, layer-{}, bandwidth-{}, protectType-{}, WTR-{}",
+				customerName, serviceName, serviceType, aEnd, zEnd, layer, bandwidth, protectType, WTR);
+		int bandwidthG = (int) Math.ceil((double) bandwidth / 1000);
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		final BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		if (!bodTopo.nodes.contains(aEnd[0])) {
+			LOG.error("No this sourceNode:{}!", aEnd[0]);
+			return null;
+		}
+		if (!bodTopo.nodes.contains(zEnd[0])) {
+			LOG.error("No this destNode:{}!", zEnd[0]);
+			return null;
+		}
+
+		String sourceNode = aEnd[0] + "";
+		LOG.info("--------- sourceNode: {}", sourceNode);
+		String destNode = zEnd[0] + "";
+		LOG.info("---------- destNode: {}", destNode);
+
+		int slotNum = EasyFunction.getSlotNum(bandwidthG);
+		if (layer.equals("ethernet") && bandwidthG > 1) {
+			slotNum = 8;
+		}
+		LOG.info("slotNum-{}", slotNum);
+		String serviceId = bodTopo.getSeupId(bodTopo.customerName, isUpdate);
+		LOG.info("serviceId-{}", serviceId);
+		ReturnPath rst = new ReturnPath();
+		List<Connection> connList = new ArrayList<Connection>();
+		boolean isModify = false;
+		//for firehome
+		//防止端口占用  cuirui 2015.11.5
+		try {
+			for (Customer customer1 : Customer.customerInfoMap.values())                         //遍历所有用户
+			{
+				LOG.info("entering customer1");
+				LOG.info(" customer1.getServiceType() is {}", customer1.getServiceType());
+				if (customer1.getServiceType() == 1) {                         //这里只需要把所有的Bod用户遍历出来
+					LOG.info("customer1.bodTopo is {}", customer1.bodTopo.toString());
+					LOG.info("customer1.bodTopo.serviceIdReturnInfo is {}", customer1.bodTopo.serviceIdReturnInfo.toString());
+					if (customer1.bodTopo.serviceIdReturnInfo != null && !customer1.bodTopo.serviceIdReturnInfo.isEmpty()) {
+						LOG.info("customer1.bodTopo.serviceIdReturnInfo size is {}", customer1.bodTopo.serviceIdReturnInfo.size());
+						for (ReturnPath returnPath : customer1.bodTopo.serviceIdReturnInfo.values())     //遍历所有业务
+						{
+							LOG.info("entering returnPath");
+							if (returnPath.getConnections() != null) {
+								for (Connection connection : returnPath.getConnections())                     //遍历所有链接
+								{
+									LOG.info("entering connection");
+									for (NodeAndPort nodeAndPort : connection.getPath())                     //遍历所有端口和节点的集合
+									{
+										LOG.info("entering nodeAndPort");
+										if (sourceNode.equals(nodeAndPort.getIp().toString()) && aEnd[1] == nodeAndPort.getPort()) {    //如果已经被占用，直接报错
+											LOG.info("端口已经被占用");
+											return null;
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+
+			}
+		} catch (Exception e) {
+			LOG.info(e.getMessage());
+		}
+		//cuirui 2015.11.5防止操作失误，比如此端口是GE接口，下的业务大于这个值
+		LOG.info("come to nodePortMap");
+//        Map<Integer, ChoosePortResult> nodePortMap = Customer.customerInfoMap.get(customerName).bodTopo.nodePortMap;
+//        if(nodePortMap != null || !nodePortMap.isEmpty()) {
+//            int clientEndType = nodePortMap.get(sourceNode).getThisPort(aEnd[1]).getClientEndType();
+//            LOG.info("此端口的clientEndType为{}", clientEndType);
+//            if (bandwidth > Math.pow(10, (double) (clientEndType + 2)))                        //指数运算，如果clientEndType为1，则为GE，判断bandwidth是否大于10的3次方，同理clientEndType为2,为10GE，则判断bandwidth是否大于10的4次方
+//            {
+//                LOG.info("当前请求业务超过了端口的最大速率限制");
+//                return null;
+//            }
+//        }
+		Boolean isSetupSuccess = bodTopo.setupRealTimePath(customerName, serviceId, protectType, sourceNode,
+				aEnd[1], destNode, zEnd[1], slotNum, connList,
+				layer, bandwidth, MeterModCommand.OFPMCADD, isModify, WTR, serviceType, false, isUpdate);
+		if (VlanIdInventory.containsService(serviceId)) {
+			aEnd[2] = VlanIdInventory.getServiceVlanId(serviceId);
+			zEnd[2] = VlanIdInventory.getServiceVlanId(serviceId);
+		}
+		if (isSetupSuccess) {
+			rst.setId(serviceId);
+			rst.setName(serviceName);
+			rst.setServiceType(serviceType);
+			rst.setaEnd(aEnd);
+			rst.setzEnd(zEnd);
+			rst.setBandwidth(bandwidth);
+			rst.setLayer(layer);
+			rst.setProtectionType(protectType);
+			rst.setWTR(WTR);
+			rst.setIncludedVertex(null);
+			rst.setExcludedVertex(null);
+			rst.setRealCreateTime(Calendar.getInstance().getTime());
+			LOG.info("--------- connections-------: {}", connList);
+			rst.setConnections(connList);
+			bodTopo.serviceId2Name.put(serviceId, serviceName);
+			bodTopo.serviceIdReturnInfo.put(serviceId, rst);
+			if (protectType == 0x40) {
+				ReturnPath originRst = new ReturnPath(serviceId, serviceName, serviceType, aEnd, zEnd, layer,
+						bandwidth, protectType, WTR, rst.getRealCreateTime(), null, null, rst.getGpid());
+				originRst.setConnections(connList);
+				bodTopo.reRouteServiceIdReturnInfo.put(serviceId, originRst);
+			}
+//			final Set<String> relatedUser = Customer.customerInfoMap.get(customerName).userInfoMap.keySet();
+//            final String fCustomerName = customerName;
+//            final String fServiceId = serviceId;
+//			LOG.info("----------SetUp----------success-----------kobe-------------");
+//            Runnable performancePushMessage = new Runnable() {
+//                public void run() {
+//                    // task to run goes here
+//					LOG.info("----- start a bod timed performance query, customerName: {}, serviceId: {}",
+//							fCustomerName, fServiceId);
+//					//7-20
+//                    /*
+//                    TODO kobe 暂时先修改 8-4 API0.84
+//                     */
+//                    if(bodTopo.qamMap.containsKey(fServiceId)) {
+//                        LOG.info("****************准备好推送性能参数给BodAPP*********************");
+//                        List<String> queryResult = queryOAM(fCustomerName, fServiceId);
+//                        if(queryResult != null) {
+//                            LOG.info("  查询不为空 ");
+//                            QueryOAMResult originResult = new QueryOAMResult(queryResult.get(0),
+//                                    Long.parseLong(queryResult.get(1)),
+//                                    Long.parseLong(queryResult.get(2)),
+//                                    Double.parseDouble(queryResult.get(3)),
+//                                    Integer.parseInt(queryResult.get(4)));
+//                            for (String user : relatedUser) {
+//                                PushQueryOAM result = new PushQueryOAM(fCustomerName,
+//                                        "rest/json/SERVICE_REQ_API/performance/" + fServiceId, originResult);
+//                                PushFacade.pushMessage(new WsResponseKey(user, fCustomerName), result);
+//                            }
+//                        }
+//                        else{
+//                            LOG.info("    直接跳过，老子不查了");
+//                        }
+//                    }
+//                }
+//            };
+//            ScheduledExecutorService performancePush = Executors.newSingleThreadScheduledExecutor();
+//			LOG.info("-------- set the executor for service: {}", serviceId);
+//            // 第二个参数为首次执行的延时时间，第三个参数为定时执行的间隔时间
+//            performancePush.scheduleAtFixedRate(performancePushMessage, 60, 60, TimeUnit.SECONDS);
+//			LOG.info("--------- performancePush for service: {}, {}", serviceId, performancePush);
+//            PushDaemon.addDaemon(serviceId, performancePush);
+		} else {
+			LOG.info("建路失败");
+			//TODO 将isSetUpFalied 还原
+//            BODTopo.isSetUpFalied = false;
+			rst = null;
+		}
+		LOG.info("rst-{}", rst);
+		LOG.info("bodTopo.serviceIdReturnInfo-{}", bodTopo.serviceIdReturnInfo);
+		return rst;
+	}
+
+//	@Override
+//	public boolean deleteRealTimePath(String customerName, String serviceId, String admin) {
+//        if(admin.equals("admin")) {
+//          BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+//			deleteRealTimePath(customerName, serviceId);
+//			Map<UserPortPropertyFactory, Boolean> portOccMap = null;
+//
+//			if(LinkPortPropertyInventory.portStatusMap.containsKey(nodeId)) {
+//				LOG.info("------------portStatusMap of LinkPortPropertyInventory already" +
+//						" contains key nodeId: {}", nodeId);
+//				portOccMap = LinkPortPropertyInventory.portStatusMap.get(nodeId);
+//				LOG.info("----------portOccMap of this node: {}", portOccMap);
+//			}
+//			else {
+//				LOG.info("---------portStatusMap of LinkPortPropertyInventory does not contain" +
+//						" ket nodeId: {}", nodeId);
+//				LinkPortPropertyInventory.portStatusMap.put(nodeId, new HashMap<UserPortPropertyFactory, Boolean>());
+//				portOccMap = LinkPortPropertyInventory.portStatusMap.get(nodeId);
+//			}
+//		}
+//	}
+
+	@Override
+	public boolean deleteRealTimePath(String customerName, String serviceId, boolean isUpdate) {
+		LOG.info("==============deleteRealTimePath(), 测试====================");
+		LOG.info("hry added, customerName-{}, serviceId-{}",
+				customerName, serviceId);
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return false;
+		}
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		if (!bodTopo.serviceIdReturnInfo.containsKey(serviceId)) {
+			LOG.error("没有这个serviceId");
+			LOG.error("此时存储的信息:{}", bodTopo.serviceIdReturnInfo);
+			return false;
+		}
+		ReturnPath tmpReturnPath = null;
+		try {
+			// 暂存ReturnPath信息
+			LOG.info("开始克隆对象");
+			tmpReturnPath = (ReturnPath) bodTopo.serviceIdReturnInfo.get(serviceId).obtainClone();
+		} catch (CloneNotSupportedException e) {
+			e.printStackTrace();
+			LOG.info("克隆对象失败！");
+		}
+
+		if (bodTopo.delRealTimePath(serviceId, isUpdate)) {
+			// 将要删除的业务存入文件中去 added by yby
+			try {
+				LOG.info("BOD-将要把被删除的业务{}存放进文件中去", serviceId);
+				SimpleDateFormat format = new SimpleDateFormat(FileIO.dateFormat);
+				String date = format.format(new Date());
+				DeletedService deletedService = new DeletedService(
+						tmpReturnPath, date, customerName);
+				FileIO.appendDeletedServiceMap(
+						FileIO.getCusFile(FileIO.cusDeletedServiceName),
+						FileIO.delServFileWriter, deletedService);
+				LOG.info("BOD-将要把被删除的业务{}加入到Customer.customerDelServInfoMap中去！", serviceId);
+
+				if (!Customer.customerDelServInfoMap.containsKey(customerName)) {
+					Customer.customerDelServInfoMap.put(customerName, new ArrayList<DeletedService>());
+				} else {
+					Customer.customerDelServInfoMap.get(customerName).add(deletedService);
+				}
+			} catch (Exception e) {
+				e.printStackTrace();
+			} finally {
+				if (customerName.equals("admin")) {
+					AccountServiceImpl impl = new AccountServiceImpl();
+					int sourceNode = bodTopo.serviceIdReturnInfo.get(serviceId).getaEnd()[0];
+					int sourcePort = bodTopo.serviceIdReturnInfo.get(serviceId).getaEnd()[1];
+					int destNode = bodTopo.serviceIdReturnInfo.get(serviceId).getzEnd()[0];
+					int destPort = bodTopo.serviceIdReturnInfo.get(serviceId).getzEnd()[1];
+					impl.delPort("admin", sourceNode, sourcePort);
+					impl.delPort("admin", destNode, destPort);
+				}
+				bodTopo.serviceIdReturnInfo.remove(serviceId);
+				bodTopo.serviceId2Name.remove(serviceId);
+				LOG.info("bodTopo.serviceIdReturnInfo-{}", bodTopo.serviceIdReturnInfo);
+				ExecutorService pushDaemon = PushDaemon.getDaemon(serviceId);
+				if (pushDaemon != null) {
+					pushDaemon.shutdown();
+					PushDaemon.delDaemon(serviceId);
+				}
+				LOG.info("*******************业务删除成功并存储**************************");
+				return true;
+			}
+		} else {
+			return false;
+		}
+	}
+
+	@Override
+	public boolean setupPlanedTimePath(String customerName, String serviceName,
+									   int serviceType, int[] aEnd, int[] zEnd, String layer,
+									   int bandwidth, int protectType, int WTR, int[] planedCreatTime,
+									   int[] planedDeleteTime, StringBuilder reServiceId) {
+		LOG.info("-----------entering setupPlanedTimePath----------BodServiceImpl");
+		LOG.info("hry added, customerName-{}, serviceName-{}, serviceType-{},"
+						+ "aEnd-{}, zEnd-{}, layer-{}, bandwidth-{}, protectType-{}, WTR-{}",
+				customerName, serviceName, serviceType, aEnd, zEnd, layer, bandwidth, protectType, WTR);
+
+		int bandwidthG = (int) Math.ceil((double) bandwidth / 1000);
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return false;
+		}
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		String sourceNode = aEnd[0] + "";
+		String destNode = zEnd[0] + "";
+
+		int slotNum = EasyFunction.getSlotNum(bandwidthG);
+		String serviceId = bodTopo.getSeupId(customerName, false);
+		reServiceId.append(serviceId);
+		LOG.info("----------------serviceId-{}", serviceId);
+		ReturnPath rst = new ReturnPath();
+		rst.setOperStatus("inactive");
+		rst.setId(serviceId);
+		rst.setName(serviceName);
+		rst.setServiceType(serviceType);
+		rst.setaEnd(aEnd);
+		rst.setzEnd(zEnd);
+		rst.setBandwidth(bandwidth);
+		rst.setLayer(layer);
+		rst.setProtectionType(protectType);
+		rst.setWTR(WTR);
+		rst.setIncludedVertex(null);
+		rst.setExcludedVertex(null);
+		Date createTime = null;
+		if (planedCreatTime != null) {
+			createTime = TimeUtils.tranferTheFormatIntoDate(planedCreatTime);
+		}
+		Date deleteTime = null;
+		if (planedDeleteTime != null) {
+			deleteTime = TimeUtils.tranferTheFormatIntoDate(planedDeleteTime);
+		}
+		if ((createTime != null && deleteTime != null) && createTime.compareTo(deleteTime) >= 0) {
+			LOG.error("創建時間在刪除時間的後面，錯誤");
+			return false;
+		}
+		rst.setPlanedCreateTime(createTime);
+		rst.setPlanedDeleteTime(deleteTime);
+
+		LOG.info("line813");
+		BodModifyStart bodCreate = new BodModifyStart(
+				bodTopo, protectType,
+				sourceNode, destNode, aEnd[1], zEnd[1],
+				slotNum, layer, bandwidth, rst);
+		BodModifyEnd bodDelete = new BodModifyEnd(bodTopo, rst);
+		BodTimeService.setBodCreateDeleteTime(bodCreate, bodDelete, createTime, deleteTime);
+
+		bodTopo.serviceId2Name.put(serviceId, serviceName);
+		bodTopo.serviceIdReturnInfo.put(serviceId, rst);
+		if (protectType == 0x40) {
+			bodTopo.reRouteServiceIdReturnInfo.put(serviceId, rst);
+		}
+		LOG.info("line152");
+		LOG.info("--------return true---------setupPlanedTimePath--------------");
+		return true;
+	}
+
+	@Override
+	public ReturnPath reRouteSetupPath(String customerName, String serviceId, String node, String remoteNode) {
+
+		LOG.info("---------------reRouteSetupPath---------,customerName-{}, serviceId-{}", customerName, serviceId);
+
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+//		this.deleteRealTimePath(customerName, serviceId);
+
+		ReturnPath rst = bodTopo.serviceIdReturnInfo.get(serviceId);
+
+		int wtr = rst.getWTR();
+		int serviceType = rst.getServiceType();
+
+		String sourceNode = Integer.toString(rst.getaEnd()[0]);
+		String destNode = Integer.toString(rst.getzEnd()[0]);
+
+		int srcPort = rst.getaEnd()[1];
+		int destPort = rst.getzEnd()[1];
+
+		Integer bandwidth = rst.getBandwidth();
+		int bandwidthG = (int) Math.ceil((double) bandwidth / 1000);
+		int slotNum = EasyFunction.getSlotNum(bandwidthG);
+		boolean isVtsVpn = false;
+		boolean isBod = true;
+
+		int protectionType = rst.getProtectionType();
+
+		if (protectionType != 0x40) {
+			LOG.info("protectionType -{}", protectionType);
+			return null;
+		}
+
+		LOG.info("-----------rst-{}", rst);
+
+		String layer = rst.getLayer();
+		int speed = bandwidth;
+
+		List<Connection> connectionList = rst.getConnections();
+
+		List<Connection> connList = new ArrayList<>();
+		for (Connection con : connectionList) {
+			connList.add(con);
+		}
+
+
+		for (Connection connection : connectionList) {
+
+			String connectionId = connection.getId();
+
+
+			UndirectedGraph<String, DefaultEdge> graphManagerCopy = Activator.setupManager.graphManager.copy();
+
+
+			graphManagerCopy.removeEdge(node, remoteNode);
+
+			GraphManager newManager = new GraphManager(graphManagerCopy);
+
+
+			List<DefaultEdge> edgesJGraphT = StrategyContext.getPath(sourceNode,
+					destNode, slotNum, null, null,
+					Activator.setupManager.topoManager, newManager,
+					isVtsVpn, isBod);
+
+			if (edgesJGraphT == null || edgesJGraphT.isEmpty()) {
+				LOG.error("没有可用路径");
+				return null;
+			}
+
+			List<String> path = Activator.setupManager.graphManager.getNodePath(
+					newManager.graph, edgesJGraphT, sourceNode, destNode);
+
+			LOG.info("hry, nodePath:{}", path);
+
+			PathInfo pi = new PathInfo(protectionType, sourceNode, destNode, srcPort, destPort);
+			pi.setEdge(edgesJGraphT);
+			pi.setEdgeString(path);
+
+			//------delete path---------
+//			if(!bodTopo.delRealTimePath(serviceId)){
+//				LOG.info("--------------delete failed -----------------");
+//				return null;
+//			}
+
+			//get connectionList
+			connList.remove(connection);
+			LOG.info("----after delete:connectionId-{}, connList-{}", connection, connList);
+			boolean isModify = false;
+			if (bodTopo.setupRealTimePath(customerName, connectionId, slotNum, pi,
+					connList, layer, speed, MeterModCommand.OFPMCADD, isModify, wtr, serviceType, true, false)) {
+				LOG.info("--------------true-------- --------setUp--------");
+
+				rst.setConnections(connList);
+
+				bodTopo.serviceIdReturnInfo.put(serviceId, rst);
+				bodTopo.protectPath.put(serviceId, connList);
+				bodTopo.bodReRoutePathMap.put(connectionId, pi);
+
+				LOG.info("rst-{}", rst);
+				LOG.info("bodTopo.serviceIdReturnInfo-{}", bodTopo.serviceIdReturnInfo);
+
+				LOG.info("-------------------------SUCCESS---------------------");
+			}
+
+
+		}
+		return rst;
+	}
+
+	@Override
+	public boolean adjustRealTimePath(String customerName, String serviceId,
+									  String serviceName, int bandwidth, int protectType, boolean isUpdate) {
+		LOG.info("--------entring bod----adjustRealTimePath------");
+		LOG.info("--------kobe added, customerName-{}, serviceId-{}, serviceName-{}, bandwidth-{}, protectType-{}", customerName,
+				serviceId, serviceName, bandwidth, protectType);
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return false;
+		}
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		if (bodTopo.serviceIdReturnInfo.isEmpty() || bodTopo.serviceIdReturnInfo == null || !bodTopo.serviceIdReturnInfo.containsKey(serviceId)) {
+			LOG.error("没有这个serviceId");
+			LOG.error("此时存储的信息:{}", bodTopo.serviceIdReturnInfo);
+			return false;
+		}
+		LOG.info("-----------------entering try-catch----------------");
+		try {
+			bodTopo.serviceId2Name.put(serviceId, serviceName);
+
+
+			ReturnPath rst = bodTopo.serviceIdReturnInfo.get(serviceId);
+			//带宽没有改变
+			if (rst.getBandwidth() == bandwidth) {
+				rst.setName(serviceName);
+				LOG.info("rst-{}", rst);
+				return true;
+			}
+			int bandwidthG = (int) Math.ceil((double) bandwidth / 1000);
+			List<Connection> connList = new ArrayList<Connection>();
+			LOG.info("----------adjustRealTimePath-------kobe------------");
+			String layer = rst.getLayer();
+			LOG.info("layer : {}", layer);
+			if (bodTopo.adjustRealTimePath(customerName, serviceId, serviceName, EasyFunction.getSlotNum(bandwidthG), connList,
+					layer, bandwidth, MeterModCommand.OFPMCADD, isUpdate)) {
+				LOG.info("----------bodTopo----return true------");
+				rst.setName(serviceName);
+				rst.setBandwidth(bandwidth);
+				rst.setRealCreateTime(Calendar.getInstance().getTime());
+
+				LOG.info("success, serviceIdReturnInfo-{}", bodTopo.serviceIdReturnInfo);
+				return true;
+			} else {
+				LOG.info("failed,serviceIdReturnInfo-{}", bodTopo.serviceIdReturnInfo);
+				return false;
+			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		LOG.info("------------kobe-----adjust done----");
+		return true;
+	}
+
+	@Override
+	public boolean adjustPlanedTimePath(String customerName, String serviceId,
+										int bandwidth, int protectionType, int[] startTime, int[] endTime,
+										int[] startDate, int[] endDate, String modifyStatus) {
+		//针对周期为day
+		//every adjust service bandwidth should store!!
+
+
+
+		if (!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.error("没有这个用户名");
+			return false;
+		}
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		if (modifyStatus.equals("false")) {
+//            // 判断当前时间与原来预约建路的时间的时间差是否超过30分钟,如果超过,则不做处理. 11.12
+//            Calendar now = Calendar.getInstance();
+//            ReturnPath tmpRtnPath = bodTopo.getServiceIdReturnInfo().get(serviceId);
+//            Date planed = null;
+//            if (tmpRtnPath != null && (planed = tmpRtnPath.getPlanedCreateTime()) != null) {
+//                long mins = TimeUtils.getMinutes(now.getTimeInMillis(), planed.getTime());
+//                if (mins < 30) {
+//                    LOG.info("距离预约业务的创建不足30分钟,不允许修改业务!");
+//                    return false;
+//                }
+//            } else {
+//                LOG.info("没有{}这项业务!", serviceId);
+//                return false;
+//            }
+			// 取消预约修改
+			// TODO
+			List<Timer> timers = BodTimeService.Service2Timer.get(serviceId);
+			if (timers == null) {
+				LOG.info("当前预约修改任务列表中没有查找到要修改的业务{}的定时器", serviceId);
+				return false;
+			} else {
+				for (Timer timer2 : timers) {
+					timer2.cancel();
+					LOG.info("timer {}", timer2.toString());
+				}
+				LOG.info("取消预约修改任务成功！");
+				return true;
+			}
+		} else if (modifyStatus.equals("true")) {
+
+			//周期调整开始判断
+            Timer timerStart = new Timer();
+            Timer timerEnd = new Timer();
+			Calendar startDay = TimeUtils.tranferTheDay(startDate);
+			Calendar endDay = TimeUtils.tranferTheDay(endDate);
+			int days = TimeUtils.getDays(startDay, endDay);
+			for (int i = 0; i <= days; i++) {
+				//每天开始的时间kobe@12.10
+                Calendar startInDay = TimeUtils.addTimeInCal(startDay, startTime);
+                startDay.add(Calendar.DATE, i);
+                timerStart.schedule(new BodAdjustStart(bodTopo, serviceId, bandwidth), startInDay.getTime());
+                String serviceName = bodTopo.serviceId2Name.get(serviceId);
+                //每天结束的时间kobe@12.10
+				Calendar endInDay = TimeUtils.addTimeInCal(endDay, endTime);
+                endInDay.add(Calendar.DATE, i);
+                timerEnd.schedule(new BodAdjustEnd(bodTopo, serviceId,
+                        new BodAdjustStart(bodTopo, serviceId, bandwidth)), endInDay.getTime());
+
+                BodTimeService.setBodAdjustPeriodDayTime(new BodAdjustStart(bodTopo, serviceId, bandwidth),
+                        new BodAdjustEnd(bodTopo, serviceId,
+                                new BodAdjustStart(bodTopo, serviceId, bandwidth)), days, startInDay, endInDay);
+                //kobe
+                String formatProtectionType = "0x";
+                if (Integer.toHexString(protectionType).length() == 1) {
+                    formatProtectionType += "0" + Integer.toHexString(protectionType);
+                } else {
+                    formatProtectionType += Integer.toHexString(protectionType);
+                }
+                bodTopo.planedAdjustMap.put(serviceId, new PlanedAjustInfo(serviceId, 2, serviceName,
+                        bandwidth, formatProtectionType, "day", startDate[0] + "-" + startDate[1] + "-" + startDate[2],
+                        endDate[0] + "-" + endDate[1] + "-" + endDate[2], new Section(startTime[0] + ":" +
+                        startTime[1] + ":" + startTime[2], endTime[0] + ":" +
+                        endTime[1] + ":" + endTime[2])));
+			}
+			LOG.info("success 配置好预约带宽调整的时间!!!!!!");
+			return true;
+		}else {
+            LOG.info("modifyStatus is neither true nor false!");
+            return false;
+        }
+	}
+
+	@Override
+	public boolean adjustPlanedTimePath(String customerName, String serviceId,
+			int bandwidth, int protectionType, String startWeekDay,
+			String endWeekDay, int[] startTime, int[] endTime, int[] startDate,
+			int[] endDate) {
+		//针对周期为week
+		if(!Customer.customerInfoMap.containsKey(customerName)){
+			LOG.error("没有这个用户名");
+			return false;
+		}
+
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		
+		BodAdjustStart bodStart = new BodAdjustStart(bodTopo, serviceId,bandwidth);
+		BodAdjustEnd bodEnd = new BodAdjustEnd(bodTopo, serviceId, bodStart);
+		Calendar startDay = TimeUtils.tranferTheDay(startDate);
+		Calendar endDay = TimeUtils.tranferTheDay(endDate);
+		int days = TimeUtils.getDays(startDay, endDay);//11号与13号，得到days=2
+		Calendar startInDay = TimeUtils.addTimeInCal(startDay, startTime, startWeekDay);
+		Calendar endInDay = TimeUtils.addTimeInCal(startDay, endTime,endWeekDay);
+		BodTimeService.setBodAdjustPeriodWeekTime(bodStart, bodEnd, days, startInDay, endInDay);
+		String serviceName = bodTopo.serviceId2Name.get(serviceId);
+        //kobe
+        String formatProtectionType = "0x";
+        if (Integer.toHexString(protectionType).length() == 1 ) {
+            formatProtectionType += "0" + Integer.toHexString(protectionType);
+        } else {
+            formatProtectionType += Integer.toHexString(protectionType);
+        }
+		bodTopo.planedAdjustMap.put(serviceId, new PlanedAjustInfo(serviceId, 2, serviceName,
+				bandwidth, formatProtectionType, "week", startDate[0] + "-" + startDate[1] + "-" + startDate[2],
+				endDate[0] + "-" + endDate[1] + "-" + endDate[2], new Section(startWeekDay + " " + startTime[1] + ":" +
+				startTime[2] + ":" + startTime[3], endWeekDay + " " + endTime[1] + ":" +
+				endTime[2] + ":" + endTime[3])));
+		return true;
+	}
+
+	@Override
+	public boolean adjustPlanedTimePath(String customerName, String serviceId,
+			int bandwidth, int protectionType, int startMonth, int endMonth,
+			int[] startTime, int[] endTime, int[] startDate, int[] endDate) {
+		//针对周期为month
+		if(!Customer.customerInfoMap.containsKey(customerName)){
+			LOG.error("没有这个用户名");
+			return false;
+		}
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		
+		BodAdjustStart bodStart = new BodAdjustStart(bodTopo, serviceId,bandwidth);
+		BodAdjustEnd bodEnd = new BodAdjustEnd(bodTopo, serviceId, bodStart);
+		Calendar startDay = TimeUtils.tranferTheDay(startDate);
+		Calendar endDay = TimeUtils.tranferTheDay(endDate);
+		int days = TimeUtils.getDays(startDay, endDay)/7;//11号与13号，得到days=2,weeks=0
+		Calendar startInDay = TimeUtils.addWeekInCal(startDay, startTime, startMonth);
+		Calendar endInDay = TimeUtils.addWeekInCal(startDay, endTime,endMonth);
+		BodTimeService.setBodAdjustPeriodMonthTime(bodStart, bodEnd, days, startInDay, endInDay);
+		String serviceName = bodTopo.serviceId2Name.get(serviceId);
+        //kobe
+        String formatProtectionType = "0x";
+        if (Integer.toHexString(protectionType).length() == 1 ) {
+            formatProtectionType += "0" + Integer.toHexString(protectionType);
+        } else {
+            formatProtectionType += Integer.toHexString(protectionType);
+        }
+		bodTopo.planedAdjustMap.put(serviceId, new PlanedAjustInfo(serviceId, 2, serviceName,
+				bandwidth, formatProtectionType, "month", startDate[0] + "-" + startDate[1] + "-" + startDate[2],
+				endDate[0] + "-" + endDate[1] + "-" + endDate[2], new Section(startMonth + " " + startTime[1] + ":" +
+				startTime[2] + ":" + startTime[3], endMonth + " " + endTime[1] + ":" +
+				endTime[2] + ":" + endTime[3])));
+		return true;
+	}
+
+	@Override
+	public List<String> queryService(String customerName) {
+		if(!Customer.customerInfoMap.containsKey(customerName)){
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		Set<String> serviceIdSet = bodTopo.serviceIdReturnInfo.keySet();
+		List<String> rst = new ArrayList<String>();
+		rst.addAll(serviceIdSet);
+		return rst;
+	}
+
+	@Override
+	public List<String> queryService(String customerName, int nodeId, int portNo){
+		if(!Customer.customerInfoMap.containsKey(customerName)){
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		//得到一个存了所有业务的map
+		Map<String, ReturnPath> serviceMap = bodTopo.serviceIdReturnInfo;
+
+		//返回结果
+		List<String> rst = new ArrayList<>();
+
+		//key值是serviceId，aEnd/zEnd分别对应原宿点的nodeId/portNo
+		for(String key : serviceMap.keySet()){
+			ReturnPath returnPath = serviceMap.get(key);
+			//原/宿点之一满足条件
+			if((returnPath.getaEnd()[0] == nodeId && returnPath.getaEnd()[1]==portNo)||
+					(returnPath.getzEnd()[0] == nodeId && returnPath.getzEnd()[1]==portNo)){
+				rst.add(key);
+			}
+		}
+
+		return rst;
+	}
+
+	@Override
+	public List<String> queryServiceDisrupt(String customerName, int nodeId, int portNo) {
+		if(!Customer.customerInfoMap.containsKey(customerName)){
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		//得到一个存了所有业务的map
+		Map<String, ReturnPath> serviceMap = bodTopo.serviceIdReturnInfo;
+
+		//返回结果
+		List<String> rst = new ArrayList<>();
+
+		for(String key : serviceMap.keySet()){
+			ReturnPath returnPath = serviceMap.get(key);
+			//原/宿点之一满足条件
+			for(Connection connection : returnPath.getConnections()) {
+				if(connection.getConnectionType() == 2) {
+					continue;
+				}
+				for(NodeAndPort nodeAndPort : connection.getPath()) {
+					if(nodeAndPort.getIp() == nodeId && nodeAndPort.getPort() == portNo) {
+						rst.add(key);
+					}
+				}
+			}
+		}
+
+		return rst;
+	}
+
+	@Override
+	public List<String> queryOnePlusServiceDisrupt(String customerName, int nodeId, int portNo) {
+		if(!Customer.customerInfoMap.containsKey(customerName)){
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		//得到一个存了所有业务的map
+		Map<String, ReturnPath> serviceMap = bodTopo.serviceIdReturnInfo;
+
+		//返回结果
+		List<String> rst = new ArrayList<>();
+
+		for(String key : serviceMap.keySet()){
+			ReturnPath returnPath = serviceMap.get(key);
+			//原/宿点之一满足条件
+			for(Connection connection : returnPath.getConnections()) {
+				if(connection.getConnectionType() != 2) {
+					continue;
+				}
+				for(NodeAndPort nodeAndPort : connection.getPath()) {
+					if(nodeAndPort.getIp() == nodeId && nodeAndPort.getPort() == portNo) {
+						rst.add(key);
+					}
+				}
+			}
+		}
+
+		return rst;
+	}
+
+	@Override
+	public List<String> queryReRouteServiceDisrupt(String customerName, int nodeId, int portNo) {
+		if(!Customer.customerInfoMap.containsKey(customerName)){
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		//得到一个存了所有业务的map
+		Map<String, ReturnPath> serviceMap = bodTopo.reRouteServiceIdReturnInfo;
+
+		//返回结果
+		List<String> rst = new ArrayList<>();
+
+		for(String key : serviceMap.keySet()){
+			ReturnPath returnPath = serviceMap.get(key);
+			//原/宿点之一满足条件
+			for(Connection connection : returnPath.getConnections()) {
+				if(connection.getConnectionType() == 2) {
+					continue;
+				}
+				for(NodeAndPort nodeAndPort : connection.getPath()) {
+					if(nodeAndPort.getIp() == nodeId && nodeAndPort.getPort() == portNo) {
+						rst.add(key);
+					}
+				}
+			}
+		}
+
+		return rst;
+	}
+
+	@Override
+	public ReturnPath queryServiceId(String customerName, String serviceId) {
+		if(!Customer.customerInfoMap.containsKey(customerName)){
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		return bodTopo.serviceIdReturnInfo.get(serviceId);
+	}
+
+	@Override
+	public List<String> queryServiceName(String customerName, String serviceName) {
+		if(!Customer.customerInfoMap.containsKey(customerName)){
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		Set<String> serviceIdSet = bodTopo.serviceIdReturnInfo.keySet();
+		List<String> rst = new ArrayList<String>();
+		for(String serviceId: serviceIdSet){
+			if(bodTopo.serviceId2Name.get(serviceId).equals(serviceName)){
+				rst.add(serviceId);
+			}
+		}
+		return rst;
+	}
+
+	@Override
+	public boolean setupOAMStatus(String customerName, final String serviceId,
+			boolean TMStatus, boolean LMStatus, boolean DMStatus) {
+        LOG.info("****************BOd用户配置性能************");
+		if(!Customer.customerInfoMap.containsKey(customerName)){
+			LOG.error("没有这个用户名");
+			return false;
+		}
+		final BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		bodTopo.qamMap.put(serviceId, new QAM(TMStatus, LMStatus, DMStatus));
+		//下发setConfig，配置信息
+		int valanId = bodTopo.serviceIdReturnInfo.get(serviceId).getaEnd()[2];
+//		int valanId = 0;
+		if(!Activator.setupManager.service2IdMap.containsKey(serviceId)){
+			LOG.error("NO THIS SERVICEID!!!");
+			return false;
+		}
+		int packetServiceId = Activator.setupManager.service2IdMap.get(serviceId);
+		//setconfig
+
+        new SendPacketProxy().sendSetConfigQAM(bodTopo.getBodConnectionMap().get(serviceId),
+                    bodTopo.serviceIdReturnInfo.get(serviceId).getaEnd(),
+                    bodTopo.serviceIdReturnInfo.get(serviceId).getzEnd(),
+                    valanId,
+                    bodTopo.qamMap.get(serviceId),
+                    packetServiceId);
+        if(TMStatus == false && LMStatus ==false && DMStatus == false)
+        {
+            LOG.info( "      不需要查詢性能了 ");
+            bodTopo.serviceIdReturnInfo.get(serviceId).setCuirui(false);
+            bodTopo.serviceIdReturnInfo.get(serviceId).setQueryOAMNumber(1);// 为了防止开始查询业务然后停止然后重新开始造成第一个数据为0
+            bodTopo.qamMap.remove(serviceId);                               //qamMap里没有这个serviceId，将不会进入下一个判断里
+        }
+        else {
+            LOG.info(  "      需要查詢性能   ");
+            bodTopo.serviceIdReturnInfo.get(serviceId).setCuirui(true);
+        }
+        final Set<String> relatedUser = Customer.customerInfoMap.get(customerName).userInfoMap.keySet();
+        final String fCustomerName = customerName;
+        final String fServiceId = serviceId;
+        if(bodTopo.qamMap.containsKey(serviceId))
+        {
+            LOG.info("----------线程开启----------");
+            Runnable performancePushMessage = new PerformancePushMessage(this, bodTopo, fCustomerName, fServiceId, relatedUser);
+
+            ScheduledExecutorService performancePush = Executors.newSingleThreadScheduledExecutor();
+            LOG.info("-------- set the executor for service: {}", serviceId);
+            // 第二个参数为首次执行的延时时间，第三个参数为定时执行的间隔时间
+            ScheduledFuture future = performancePush.scheduleAtFixedRate(performancePushMessage, 60, 60, TimeUnit.SECONDS);
+
+            LOG.info("--------- performancePush for service: {}, {}", serviceId, performancePush);
+            PushDaemon.addDaemon(serviceId, performancePush);
+        }else {
+            //防止第一次就下一个全false的配置指令，那么下面这个通过serviceId的getDaemon会是空
+            //正常情况下，下发一个全false的配置指令会停止这个线程
+            //这里处理逻辑可能会有问题，你们看下。
+            try {
+                ExecutorService pushDaemon = PushDaemon.getDaemon(serviceId);
+                if (pushDaemon != null) {
+                    pushDaemon.shutdownNow();
+                    while(!pushDaemon.isTerminated()) { }// 此处无限循环，直到确定executor确实已经关掉了。
+                }
+            }catch(Exception e){
+                LOG.info(e.getMessage());
+            }finally{
+                PushDaemon.delDaemon(serviceId);
+                return true;
+            }
+        }
+        return true;
+	}
+
+	@Override
+	public List<String> queryOAM(String customerName, String serviceId) {
+		if(!Customer.customerInfoMap.containsKey(customerName)){
+			LOG.error("没有这个customerName");
+			return null;
+		}
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		QAM qam = bodTopo.qamMap.get(serviceId);
+
+		if(!Activator.setupManager.service2IdMap.containsKey(serviceId)){
+			LOG.error("NO THIS SERVICEID!!!");
+			return null;
+		}
+		int packetServiceId = Activator.setupManager.service2IdMap.get(serviceId);
+		//multipart-request
+		int valanId = bodTopo.serviceIdReturnInfo.get(serviceId).getaEnd()[2];
+//		int valanId = 0;
+        if(!bodTopo.serviceIdReturnInfo.get(serviceId).isCuirui()  )
+        {
+            LOG.info("    ************不用發性能查詢的包********* ");
+            return  null;
+        }
+        LOG.info("    ************需要發性能查詢的包********* ");
+        synchronized (CvniBodHandler.class) {
+            CvniBodHandler.OAMThreadStore.put(valanId, this);
+        }
+		//TODO: zhouquanwei
+		new SendPacketProxy().sendMultiparRequest (
+				bodTopo.serviceIdReturnInfo.get(serviceId).getaEnd(),
+				bodTopo.serviceIdReturnInfo.get(serviceId).getzEnd(),
+				valanId,
+				bodTopo.qamMap.get(serviceId),
+				packetServiceId, 
+				bodTopo.mapNotifyQAMNum);
+		//线程等待，直到被唤醒才能读取数据
+//		int i=0;
+//		while(i < bodTopo.mapNotifyQAMNum.get(packetServiceId)){
+
+        LOG.info("---------- OAMThreadStore: {}", CvniBodHandler.OAMThreadStore);
+		synchronized(this) {
+				try{
+                    // 11-12 10秒后超时返回。
+					this.wait(10000);
+                    Map<Integer, Map<Integer, Map<Integer,PortStatsStatics>>> nodePortRxTx = Activator.setupManager.nodePortRxTx;
+
+					int srcNode = bodTopo.serviceIdReturnInfo.get(serviceId).getaEnd()[0];
+					int srcPort = bodTopo.serviceIdReturnInfo.get(serviceId).getaEnd()[1];
+					int destNode = bodTopo.serviceIdReturnInfo.get(serviceId).getzEnd()[0];
+					int destPort = bodTopo.serviceIdReturnInfo.get(serviceId).getzEnd()[1];
+					LOG.info("line 766");
+                    if(nodePortRxTx.containsKey(srcNode) &&
+                            nodePortRxTx.get(srcNode).containsKey(srcPort) &&
+                            nodePortRxTx.get(srcNode).get(srcPort).containsKey(valanId)) {
+                        PortStatsStatics srcPortStatics = Activator.setupManager.nodePortRxTx.get(srcNode).get(srcPort).get(valanId);
+                        PortStatsStatics destPortStatics = Activator.setupManager.nodePortRxTx.get(destNode).get(destPort).get(valanId);
+                        LOG.info("line 769");
+                        List<String> rst = new ArrayList<>();
+                        rst.add(serviceId);
+
+                        long rxSrc = srcPortStatics.getLatestRx();
+                        long rxDest = destPortStatics.getLatestRx();
+                        long txSrc = srcPortStatics.getLatestTx();
+                        long txDest = destPortStatics.getLatestTx();
+                    /*
+                    TODO 暂时先增加更改 kobe8-4 为满足电信需求 只对tx发送吞吐量进行处理 @2015.9.17
+                     */
+                        long a = txSrc;
+//                    long a = txDest;
+
+                        long b = txDest;
+//                    long b = txSrc;
+                        rst.add(Long.toString(b));
+                        rst.add(Long.toString(a));
+                        //TODO : 比較兩個數字最大輸出 kobe@nanjing
+
+                        Double srcPacketLoss = srcPortStatics.getLatestLoss();
+                        Double destPacketLoss = destPortStatics.getLatestLoss();
+
+                        Double loss = srcPacketLoss >= destPacketLoss ? srcPacketLoss : destPacketLoss;
+//                    Double loss = (srcPacketLoss + destPacketLoss)/2.0;
+                        rst.add(loss.toString());
+
+                        Integer srcPacketDelay = srcPortStatics.getLatestDelay();
+                        Integer destPacketDelay = destPortStatics.getLatestDelay();
+                        Integer delay = (srcPacketDelay + destPacketDelay) / 2;
+                        rst.add(delay.toString());
+                        LOG.info("rst-{}", rst);
+                        return rst;
+                    }else {
+                        LOG.info("查询性能失败！");
+                        return null;
+                    }
+				}catch(Exception e){
+                    LOG.info(e.getMessage());
+				}
+//				i += 1;
+			}
+//		}
+		
+		return null;
+	}
+	
+	@Override
+	public List<QueryDisruptResult> queryDisrupt(String customerName){
+		LOG.info("------------------kobe added, 5.12, queryDisrupt,测试成功---------------");
+		if(!Customer.customerInfoMap.containsKey(customerName)){
+			LOG.error("没有这个用户名");
+			return null;
+		}
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		LOG.info("------------disruptMap-{}", Customer.disruptMap);
+		LOG.info("-------------serviceIdReturnInfo-{}", bodTopo.serviceIdReturnInfo);
+		List<QueryDisruptResult> rst = new ArrayList<>();
+		for(String serviceId : Customer.disruptMap.keySet()){
+			if(bodTopo.serviceIdReturnInfo.containsKey(serviceId)){
+				//TODO: 如果时预约任务怎么办？现在暂时不管，只用做实时业务
+				rst.addAll(Customer.disruptMap.get(serviceId));
+			}
+		}
+		LOG.info("rst-{}", rst);
+		return rst;
+	}
+
+	// cuirui
+	@Override
+	public List<Integer> queryNodeGeo(int nodeId) {
+		if(iTest.nodesMap.containsKey(nodeId)) {
+			List<Integer> rst = new ArrayList<>();
+			rst.add(iTest.nodesMap.get(nodeId).longitude);
+			rst.add(iTest.nodesMap.get(nodeId).latitude);
+			return rst;
+		}
+		else {
+			return new ArrayList<>();
+		}
+	}
+
+	@Override
+	public String queryNodeVirName(String customerName, int nodeId) {
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		if(bodTopo.virtualNameMap.containsKey(nodeId)) {
+			return bodTopo.virtualNameMap.get(nodeId);
+		}
+		else {
+			return "-";
+		}
+	}
+	@Override
+	public PlanedAjustInfo queryPlanedAdjust(String customerName, String serviceId) {
+        if(!Customer.customerInfoMap.containsKey(customerName)) {
+			LOG.info("---------- no this customer");
+		}
+		BODTopo bodTopo = Customer.customerInfoMap.get(customerName).bodTopo;
+		if(bodTopo.planedAdjustMap.containsKey(serviceId)) {
+			return bodTopo.planedAdjustMap.get(serviceId);
+		}
+		else {
+			return null;
+		}
+	}
+    @Override
+    public boolean superDelFlow(String customerName) {
+        LOG.info("customerName : {}", customerName);
+//        if(!Customer.customerInfoMap.containsKey(customerName)) {
+//            LOG.info("no this customer in map ");
+//        }
+        LOG.info("entering sendPacketProxy");
+
+        if(new SendPacketProxy().sendSuperDelFlow(customerName)) {
+            LOG.info("发包成功");
+            return true;
+        }else {
+            return false;
+        }
+    }
+}
+
+
+
+class PerformancePushMessage implements Runnable {
+    private BodServiceImpl bodServiceImpl;
+    private BODTopo bodTopo;
+    private String fCustomerName;
+    private String fServiceId;
+    private Set<String> relatedUser;
+
+    private static final Logger LOG = LoggerFactory.getLogger(PerformancePushMessage.class);
+
+    PerformancePushMessage(BodServiceImpl bodServiceImpl, BODTopo bodTopo, String fCustomerName, String fServiceId, Set<String> relatedUser) {
+        this.bodServiceImpl = bodServiceImpl;
+        this.bodTopo = bodTopo;
+        this.fCustomerName = fCustomerName;
+        this.fServiceId = fServiceId;
+        this.relatedUser = relatedUser;
+    }
+
+    public void run() {
+        try {
+            LOG.info("----- start a bod timed performance query, customerName: {}, serviceId: {}",
+                    fCustomerName, fServiceId);
+            LOG.info("****************准备好推送性能参数给BodAPP*********************");
+            List<String> queryResult = bodServiceImpl.queryOAM(fCustomerName, fServiceId);
+            if (queryResult != null && bodTopo.serviceIdReturnInfo.get(fServiceId).getQueryOAMNumber() != 1) {
+                int num = bodTopo.serviceIdReturnInfo.get(fServiceId).getQueryOAMNumber();
+                LOG.info("  查询不为空 ");
+                QueryOAMResult originResult = new QueryOAMResult(queryResult.get(0),
+                        Long.parseLong(queryResult.get(1)),
+                        Long.parseLong(queryResult.get(2)),
+                        Double.parseDouble(queryResult.get(3)),
+                        Integer.parseInt(queryResult.get(4)));
+                for (String user : relatedUser) {
+                    PushQueryOAM result = new PushQueryOAM(fCustomerName,
+                            "rest/json/SERVICE_REQ_API/performance/" + fServiceId, originResult);
+                    PushFacade.pushMessage(new WsResponseKey(user, fCustomerName), result);
+                }
+                bodTopo.serviceIdReturnInfo.get(fServiceId).setQueryOAMNumber(num + 1);
+            } else if (queryResult != null && bodTopo.serviceIdReturnInfo.get(fServiceId).getQueryOAMNumber() == 1) {
+                LOG.info("第一次查询，避免数据为0，屏蔽掉。");
+                int num = bodTopo.serviceIdReturnInfo.get(fServiceId).getQueryOAMNumber();
+                bodTopo.serviceIdReturnInfo.get(fServiceId).setQueryOAMNumber(num + 1);
+                LOG.info("the  queryNum is {}", bodTopo.serviceIdReturnInfo.get(fServiceId).getQueryOAMNumber());
+            } else {
+                LOG.info("   查询值为null 直接跳过");
+            }
+        }catch (Exception e){
+            LOG.info(e.getMessage());
+        }
+    }
+
+}
